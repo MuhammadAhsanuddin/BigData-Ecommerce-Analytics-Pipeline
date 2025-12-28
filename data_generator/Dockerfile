@@ -6,5 +6,6 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY generator.py .
+COPY models.py .
 
 CMD ["python", "generator.py"]

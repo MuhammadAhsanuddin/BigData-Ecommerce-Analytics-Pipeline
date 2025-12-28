@@ -3,7 +3,7 @@ import json
 import time
 from datetime import datetime, timedelta
 from faker import Faker
-from models import EcommerceModels  # Statistical modelsimport numpy as np
+import numpy as np
 from kafka import KafkaProducer
 import random
 
@@ -17,11 +17,26 @@ PEAK_HOURS = [10, 11, 12, 18, 19, 20]  # Peak shopping times
 CUSTOMER_POOL_SIZE = 10000
 PRODUCT_POOL_SIZE = 500
 
-# Initialize Kafka Producer
-producer = KafkaProducer(
-    bootstrap_servers=os.getenv('KAFKA_BROKER', 'localhost:9092'),
-    value_serializer=lambda v: json.dumps(v).encode('utf-8')
-)
+# Initialize Kafka Producer with retry logic
+def get_kafka_producer():
+    max_retries = 30
+    retry_count = 0
+    while retry_count < max_retries:
+        try:
+            producer = KafkaProducer(
+                bootstrap_servers='kafka:9092',
+                value_serializer=lambda v: json.dumps(v).encode('utf-8'),
+                api_version=(0, 10, 1)
+            )
+            print("✅ Successfully connected to Kafka!")
+            return producer
+        except Exception as e:
+            retry_count += 1
+            print(f"⏳ Waiting for Kafka... (attempt {retry_count}/{max_retries})")
+            time.sleep(5)
+    raise Exception("❌ Failed to connect to Kafka after 30 attempts")
+
+producer = get_kafka_producer()
 
 # Pre-generate customer pool (Zipf distribution - 20% customers make 80% orders)
 print("Generating customer pool...")
@@ -55,7 +70,7 @@ for i in range(PRODUCT_POOL_SIZE):
         'list_price': round(cost_price * np.random.uniform(1.3, 2.5), 2)
     })
 
-print("Starting data generation...")
+print("🚀 Starting data generation...")
 
 order_id_counter = 0
 
@@ -140,10 +155,10 @@ while True:
         for _ in range(orders_this_interval):
             event = generate_order()
             producer.send('orders', value=event)
-            print(f"Sent order: {event['order']['order_id']} | Amount: ${event['order']['total_amount']}")
+            print(f"📦 Sent order: {event['order']['order_id']} | Amount: ${event['order']['total_amount']}")
         
         time.sleep(5)  # Generate every 5 seconds
         
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"❌ Error: {e}")
         time.sleep(5)
