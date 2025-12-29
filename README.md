@@ -39,6 +39,8 @@ Design and implement a **real-time analytics pipeline** that:
 ---
 
 ## 🏗️ System Architecture Overview
+![architecture](https://github.com/user-attachments/assets/6128a95b-bfb2-454b-bc69-08069d432abb)
+
 
 The pipeline follows a **Lambda-style architecture** with a clear separation between:
 
