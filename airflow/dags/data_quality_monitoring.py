@@ -36,7 +36,7 @@ def check_data_quality(**context):
     # Check 1: Duplicate orders
     print("\n📊 Check 1: Duplicate Orders")
     pipeline = [
-        {"$group": {"_id": "$order.order_id", "count": {"$sum": 1}}},
+        {"$group": {"_id": "$order_id", "count": {"$sum": 1}}},  # ← FIXED!
         {"$match": {"count": {"$gt": 1}}}
     ]
     duplicates = list(db.orders.aggregate(pipeline))
@@ -50,8 +50,8 @@ def check_data_quality(**context):
     
     # Check 2: Null values
     print("\n📊 Check 2: Missing Data")
-    null_orders = db.orders.count_documents({"order.order_id": None})
-    null_customers = db.orders.count_documents({"customer.customer_id": None})
+    null_orders = db.orders.count_documents({"order_id": None})  # ← FIXED!
+    null_customers = db.orders.count_documents({"customer_id": None})  # ← FIXED!
     
     if null_orders > 0:
         issues.append(f"⚠️ {null_orders} orders with null order_id")
@@ -63,7 +63,7 @@ def check_data_quality(**context):
     
     # Check 3: Invalid amounts
     print("\n📊 Check 3: Invalid Amounts")
-    invalid_amounts = db.orders.count_documents({"order.total_amount": {"$lte": 0}})
+    invalid_amounts = db.orders.count_documents({"total_amount": {"$lte": 0}})  # ← FIXED!
     
     if invalid_amounts > 0:
         issues.append(f"⚠️ {invalid_amounts} orders with invalid amounts")
@@ -73,10 +73,10 @@ def check_data_quality(**context):
     
     # Check 4: Data freshness
     print("\n📊 Check 4: Data Freshness")
-    latest_order = db.orders.find_one(sort=[("order.timestamp", -1)])
+    latest_order = db.orders.find_one(sort=[("timestamp", -1)])  # ← FIXED!
     
     if latest_order:
-        latest_time = datetime.fromisoformat(latest_order['order']['timestamp'])
+        latest_time = datetime.fromisoformat(latest_order['timestamp'])  # ← FIXED!
         age_minutes = (datetime.now() - latest_time).total_seconds() / 60
         
         print(f"   - Latest order: {age_minutes:.1f} minutes ago")
@@ -124,7 +124,7 @@ dag = DAG(
     'data_quality_monitoring',
     default_args=default_args,
     description='Monitor data quality metrics',
-    schedule_interval=timedelta(minutes=10),  # Every 10 minutes
+    schedule_interval=timedelta(minutes=10),
     catchup=False,
     tags=['monitoring', 'quality'],
 )

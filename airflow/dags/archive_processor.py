@@ -125,7 +125,7 @@ def archive_mongodb_to_hdfs():
         print(f"✅ Metadata written successfully")
         
         # ========================================
-        # UPDATE HIVE METASTORE (OPTIONAL)
+        # UPDATE HIVE METASTORE 
         # ========================================
         print("\n🗄️ Updating Hive Metastore...")
         
@@ -186,7 +186,6 @@ def archive_mongodb_to_hdfs():
             
         except Exception as e:
             print(f"⚠️ Could not update Hive metastore: {e}")
-            print("   (This is optional - archiving still succeeded)")
         
         # ========================================
         # DELETE FROM MONGODB

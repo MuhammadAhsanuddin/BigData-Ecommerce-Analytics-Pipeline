@@ -12,13 +12,13 @@ import redis
 from pymongo import MongoClient
 
 def run_analytics():
-    """Main analytics function"""
+    """Main analytics function with JOINS using PyMongo + Spark"""
     
     print("=" * 80)
-    print("📊 STARTING SPARK ANALYTICS JOB")
+    print("📊 STARTING SPARK ANALYTICS JOB WITH JOINS")
     print("=" * 80)
     
-    # Create Spark session
+    # Create Spark session (NO MONGO CONNECTOR NEEDED)
     print("🔧 Creating Spark session...")
     spark = SparkSession.builder \
         .appName("EcommerceAnalytics") \
@@ -33,106 +33,258 @@ def run_analytics():
     db = mongo_client['ecommerce']
     r = redis.Redis(host='redis', port=6379, decode_responses=True)
     
-    # Test connections
     r.ping()
     print("✅ Connected to Redis")
     print("✅ Connected to MongoDB")
     
-    # Load data from MongoDB
-    print("📥 Loading orders from MongoDB...")
-    orders = list(db.orders.find())
-    total_orders = len(orders)
+    # ========================================
+    # LOAD DATA FROM 3 NORMALIZED COLLECTIONS
+    # ========================================
+    print("📥 Loading data from 3 MongoDB collections...")
     
-    print(f"✅ Loaded {total_orders:,} orders from MongoDB")
+    orders_list = list(db.orders.find())
+    customers_list = list(db.customers.find())
+    products_list = list(db.products.find())
     
-    if total_orders == 0:
-        print("⚠️ No data in MongoDB. Exiting.")
+    print(f"✅ Loaded {len(orders_list):,} orders")
+    print(f"✅ Loaded {len(customers_list):,} customers")
+    print(f"✅ Loaded {len(products_list):,} products")
+    
+    if len(orders_list) == 0:
+        print("⚠️ No orders in MongoDB. Exiting.")
         spark.stop()
         mongo_client.close()
         return
     
-    # Flatten nested MongoDB documents
-    print("🔄 Flattening data structure...")
-    flat_data = []
-    for doc in orders:
-        flat_data.append({
-            'order_id': doc['order']['order_id'],
-            'timestamp': doc['order']['timestamp'],
-            'total_amount': doc['order']['total_amount'],
-            'quantity': doc['order']['quantity'],
-            'state': doc['customer']['state'],
-            'product_name': doc['product']['name'],
-            'category': doc['product']['category'],
-        })
+    # ========================================
+    # CONVERT TO DATAFRAMES FOR SPARK SQL JOINS
+    # ========================================
+    print("🔄 Creating Spark DataFrames...")
     
-    # Define schema
-    schema = StructType([
+    # Orders DataFrame
+    orders_data = [{
+        'order_id': o['order_id'],
+        'customer_id': o['customer_id'],
+        'product_id': o['product_id'],
+        'timestamp': o['timestamp'],
+        'quantity': o['quantity'],
+        'total_amount': o['total_amount'],
+    } for o in orders_list]
+    
+    orders_schema = StructType([
         StructField("order_id", StringType(), True),
+        StructField("customer_id", StringType(), True),
+        StructField("product_id", StringType(), True),
         StructField("timestamp", StringType(), True),
-        StructField("total_amount", DoubleType(), True),
         StructField("quantity", IntegerType(), True),
-        StructField("state", StringType(), True),
-        StructField("product_name", StringType(), True),
-        StructField("category", StringType(), True),
+        StructField("total_amount", DoubleType(), True),
     ])
     
-    # Create Spark DataFrame
-    print("🔄 Creating Spark DataFrame...")
-    df = spark.createDataFrame(flat_data, schema)
-    df.createOrReplaceTempView("orders")
-    print(f"✅ DataFrame created with {df.count():,} rows")
+    orders_df = spark.createDataFrame(orders_data, orders_schema)
+    orders_df.createOrReplaceTempView("orders")
+    
+    # Customers DataFrame
+    customers_data = [{
+        'customer_id': c['customer_id'],
+        'name': c.get('name', 'Unknown'),
+        'state': c.get('state', 'Unknown'),
+        'segment': c.get('segment', 'Regular'),
+        'city': c.get('city', 'Unknown'),
+    } for c in customers_list]
+    
+    customers_schema = StructType([
+        StructField("customer_id", StringType(), True),
+        StructField("name", StringType(), True),
+        StructField("state", StringType(), True),
+        StructField("segment", StringType(), True),
+        StructField("city", StringType(), True),
+    ])
+    
+    customers_df = spark.createDataFrame(customers_data, customers_schema)
+    customers_df.createOrReplaceTempView("customers")
+    
+    # Products DataFrame
+    products_data = [{
+        'product_id': p['product_id'],
+        'name': p.get('name', 'Unknown'),
+        'category': p.get('category', 'Unknown'),
+        'brand': p.get('brand', 'Unknown'),
+    } for p in products_list]
+    
+    products_schema = StructType([
+        StructField("product_id", StringType(), True),
+        StructField("name", StringType(), True),
+        StructField("category", StringType(), True),
+        StructField("brand", StringType(), True),
+    ])
+    
+    products_df = spark.createDataFrame(products_data, products_schema)
+    products_df.createOrReplaceTempView("products")
+    
+    print("✅ Created 3 Spark DataFrames")
     
     # ========================================
-    # ANALYTICS QUERY 1: Overall Summary
+    # PERFORM SPARK SQL JOIN (THE KEY PART!)
     # ========================================
-    print("\n📊 Query 1: Computing Overall Summary...")
-    total_revenue = float(df.agg(_sum('total_amount')).collect()[0][0])
-    avg_order_value = float(df.agg(avg('total_amount')).collect()[0][0])
+    print("\n🔗 Performing SPARK SQL INNER JOIN across 3 tables...")
     
+    joined_df = spark.sql("""
+        SELECT 
+            o.order_id,
+            o.timestamp,
+            o.total_amount,
+            o.quantity,
+            o.customer_id,
+            c.name as customer_name,
+            c.state as customer_state,
+            c.segment as customer_segment,
+            c.city as customer_city,
+            o.product_id,
+            p.name as product_name,
+            p.category as product_category,
+            p.brand as product_brand
+        FROM orders o
+        INNER JOIN customers c ON o.customer_id = c.customer_id
+        INNER JOIN products p ON o.product_id = p.product_id
+    """)
+    
+    total_joined = joined_df.count()
+    print(f"✅ INNER JOIN completed! {total_joined:,} records")
+    print(f"   📊 Joined: orders ⟕ customers ⟕ products")
+    
+    joined_df.createOrReplaceTempView("orders_joined")
+    
+    # ========================================
+    # QUERY 1: Overall Summary
+    # ========================================
+    print("\n📊 Query 1: Overall Summary...")
+    
+    summary_df = spark.sql("""
+        SELECT 
+            COUNT(*) as total_orders,
+            SUM(total_amount) as total_revenue,
+            AVG(total_amount) as avg_order_value,
+            COUNT(DISTINCT customer_id) as unique_customers,
+            COUNT(DISTINCT product_id) as unique_products
+        FROM orders_joined
+    """)
+    
+    summary_row = summary_df.collect()[0]
     summary = {
-        'total_orders': total_orders,
-        'total_revenue': round(total_revenue, 2),
-        'avg_order_value': round(avg_order_value, 2),
+        'total_orders': int(summary_row['total_orders']),
+        'total_revenue': round(float(summary_row['total_revenue']), 2),
+        'avg_order_value': round(float(summary_row['avg_order_value']), 2),
+        'unique_customers': int(summary_row['unique_customers']),
+        'unique_products': int(summary_row['unique_products']),
         'last_updated': datetime.now().isoformat()
     }
     
     r.set('analytics:summary', json.dumps(summary))
-    print(f"   ✅ Total Orders: {total_orders:,}")
-    print(f"   ✅ Total Revenue: ${total_revenue:,.2f}")
-    print(f"   ✅ Avg Order Value: ${avg_order_value:.2f}")
-    print(f"   ✅ Cached to Redis: analytics:summary")
+    print(f"   ✅ Total Orders: {summary['total_orders']:,}")
+    print(f"   ✅ Total Revenue: ${summary['total_revenue']:,.2f}")
     
     # ========================================
-    # ANALYTICS QUERY 2: Top 10 Products
+    # QUERY 2: Revenue by State & Category (WHERE + GROUP BY + HAVING)
     # ========================================
-    print("\n📊 Query 2: Computing Top 10 Products...")
+    print("\n📊 Query 2: Revenue by State & Category (with WHERE, GROUP BY, HAVING)...")
+    
+    state_category_df = spark.sql("""
+        SELECT 
+            customer_state,
+            product_category,
+            COUNT(*) as order_count,
+            COUNT(DISTINCT customer_id) as unique_customers,
+            SUM(total_amount) as total_revenue,
+            AVG(total_amount) as avg_order_value
+        FROM orders_joined
+        WHERE customer_state != 'Unknown' 
+          AND product_category != 'Unknown'
+        GROUP BY customer_state, product_category
+        HAVING SUM(total_amount) > 50
+        ORDER BY total_revenue DESC
+        LIMIT 30
+    """)
+    
+    state_category = [row.asDict() for row in state_category_df.collect()]
+    r.set('analytics:state_category', json.dumps(state_category))
+    print(f"   ✅ Cached {len(state_category)} state-category combinations")
+    
+    # ========================================
+    # QUERY 3: Top Products
+    # ========================================
+    print("\n📊 Query 3: Top 10 Products...")
+    
     top_products_df = spark.sql("""
         SELECT 
             product_name,
-            category,
+            product_category,
+            product_brand,
             SUM(quantity) as total_quantity,
             SUM(total_amount) as total_revenue,
             COUNT(*) as order_count
-        FROM orders
-        GROUP BY product_name, category
+        FROM orders_joined
+        GROUP BY product_name, product_category, product_brand
         ORDER BY total_quantity DESC
         LIMIT 10
     """)
     
     top_products = [row.asDict() for row in top_products_df.collect()]
     r.set('analytics:top_products', json.dumps(top_products))
-    print(f"   ✅ Cached {len(top_products)} top products to Redis")
+    print(f"   ✅ Cached {len(top_products)} top products")
     
     # ========================================
-    # ANALYTICS QUERY 3: Revenue by Minute
+    # QUERY 4: Orders by State
     # ========================================
-    print("\n📊 Query 3: Computing Revenue Per Minute...")
+    print("\n📊 Query 4: Orders by State...")
+    
+    by_state_df = spark.sql("""
+        SELECT 
+            customer_state as state,
+            COUNT(*) as order_count,
+            SUM(total_amount) as total_revenue,
+            AVG(total_amount) as avg_order_value
+        FROM orders_joined
+        WHERE customer_state != 'Unknown'
+        GROUP BY customer_state
+        ORDER BY order_count DESC
+        LIMIT 20
+    """)
+    
+    by_state = [row.asDict() for row in by_state_df.collect()]
+    r.set('analytics:orders_by_state', json.dumps(by_state))
+    print(f"   ✅ Cached {len(by_state)} states")
+    
+    # ========================================
+    # QUERY 5: Category Performance
+    # ========================================
+    print("\n📊 Query 5: Category Performance...")
+    
+    by_category_df = spark.sql("""
+        SELECT 
+            product_category as category,
+            COUNT(*) as order_count,
+            SUM(total_amount) as total_revenue,
+            SUM(quantity) as total_quantity
+        FROM orders_joined
+        GROUP BY product_category
+        ORDER BY total_revenue DESC
+    """)
+    
+    by_category = [row.asDict() for row in by_category_df.collect()]
+    r.set('analytics:category_performance', json.dumps(by_category))
+    print(f"   ✅ Cached {len(by_category)} categories")
+    
+    # ========================================
+    # QUERY 6: Revenue by Minute
+    # ========================================
+    print("\n📊 Query 6: Revenue Per Minute...")
+    
     revenue_by_min_df = spark.sql("""
         SELECT 
             substring(timestamp, 1, 16) as minute,
             SUM(total_amount) as total_revenue,
             COUNT(*) as order_count
-        FROM orders
+        FROM orders_joined
         GROUP BY substring(timestamp, 1, 16)
         ORDER BY minute DESC
         LIMIT 60
@@ -140,46 +292,7 @@ def run_analytics():
     
     revenue_by_min = [row.asDict() for row in revenue_by_min_df.collect()]
     r.set('analytics:revenue_by_minute', json.dumps(revenue_by_min))
-    print(f"   ✅ Cached {len(revenue_by_min)} minute data points to Redis")
-    
-    # ========================================
-    # ANALYTICS QUERY 4: Orders by State
-    # ========================================
-    print("\n📊 Query 4: Computing Orders by State...")
-    by_state_df = spark.sql("""
-        SELECT 
-            state,
-            COUNT(*) as order_count,
-            SUM(total_amount) as total_revenue,
-            AVG(total_amount) as avg_order_value
-        FROM orders
-        GROUP BY state
-        ORDER BY order_count DESC
-        LIMIT 20
-    """)
-    
-    by_state = [row.asDict() for row in by_state_df.collect()]
-    r.set('analytics:orders_by_state', json.dumps(by_state))
-    print(f"   ✅ Cached {len(by_state)} state statistics to Redis")
-    
-    # ========================================
-    # ANALYTICS QUERY 5: Category Performance
-    # ========================================
-    print("\n📊 Query 5: Computing Category Performance...")
-    by_category_df = spark.sql("""
-        SELECT 
-            category,
-            COUNT(*) as order_count,
-            SUM(total_amount) as total_revenue,
-            SUM(quantity) as total_quantity
-        FROM orders
-        GROUP BY category
-        ORDER BY total_revenue DESC
-    """)
-    
-    by_category = [row.asDict() for row in by_category_df.collect()]
-    r.set('analytics:category_performance', json.dumps(by_category))
-    print(f"   ✅ Cached {len(by_category)} category statistics to Redis")
+    print(f"   ✅ Cached {len(revenue_by_min)} minutes")
     
     # Cleanup
     print("\n🧹 Cleaning up...")
@@ -187,10 +300,11 @@ def run_analytics():
     mongo_client.close()
     
     print("=" * 80)
-    print("🎉 SPARK ANALYTICS COMPLETED SUCCESSFULLY!")
-    print(f"📊 Processed {total_orders:,} orders")
-    print(f"💰 Total Revenue: ${total_revenue:,.2f}")
-    print(f"📦 Cached 5 analytics datasets to Redis")
+    print("🎉 SPARK ANALYTICS WITH SQL JOINS COMPLETED!")
+    print(f"📊 Processed {total_joined:,} joined records")
+    print(f"💰 Total Revenue: ${summary['total_revenue']:,.2f}")
+    print(f"🔗 Used INNER JOIN: orders ⟕ customers ⟕ products")
+    print(f"📦 Cached 6 analytics datasets to Redis")
     print("=" * 80)
 
 if __name__ == "__main__":

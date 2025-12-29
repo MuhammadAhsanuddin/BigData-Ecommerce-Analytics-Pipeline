@@ -120,10 +120,26 @@ def get_avg_order_value():
     return summary_data, from_cache
 
 def get_payment_success_rate():
-    """Calculate payment success rate from MongoDB"""
-    total = db.orders.count_documents({})
-    success = db.orders.count_documents({"payment.status": "success"})
-    return (round((success / total * 100), 2) if total > 0 else 0), False
+    """Calculate payment success rate from MongoDB or Redis"""
+    # Try to get from summary first
+    try:
+        summary_str = redis_client.get('analytics:summary')
+        if summary_str:
+            summary_data = json.loads(summary_str)
+            # If we add payment_success_rate to Spark analytics, use it
+            if 'payment_success_rate' in summary_data:
+                return summary_data['payment_success_rate'], True
+    except:
+        pass
+    
+    # Fallback: Calculate from payments collection
+    try:
+        total = db.payments.count_documents({})
+        success = db.payments.count_documents({"status": "success"})
+        rate = round((success / total * 100), 2) if total > 0 else 0
+        return rate, False
+    except:
+        return 0.0, False
 
 def get_revenue_by_minute():
     """Get revenue trend from Redis cache"""
@@ -269,6 +285,21 @@ with col1:
 with col2:
     st.subheader("📊 Live System Statistics")
     
+    # Get unique customers/products from Redis (computed by Spark JOIN)
+    try:
+        summary_str = redis_client.get('analytics:summary')
+        if summary_str:
+            summary_data = json.loads(summary_str)
+            unique_customers = summary_data.get('unique_customers', 0)
+            unique_products = summary_data.get('unique_products', 0)
+        else:
+            unique_customers = 0
+            unique_products = 0
+    except Exception as e:
+        st.error(f"Redis error: {e}")
+        unique_customers = 0
+        unique_products = 0
+    
     # Get Redis info
     try:
         redis_keys = redis_client.keys('analytics:*')
@@ -284,31 +315,31 @@ with col2:
     except:
         mongo_status = "❌ MongoDB unavailable"
     
+
     stats_data = {
         "Metric": [
             "Unique Customers", 
             "Unique Products", 
             "MongoDB Size",
-            "Redis Cache Status",
-            "Data Source"
+            "Redis Cache Status"
         ],
         "Value": [
-            len(db.orders.distinct("customer.customer_id")),
-            len(db.orders.distinct("product.product_id")),
+            f"{unique_customers:,}",
+            f"{unique_products:,}",
             mongo_status,
-            redis_status,
-            "⚡ Spark → Redis → Dashboard"
+            redis_status
         ]
     }
-    st.dataframe(pd.DataFrame(stats_data), use_container_width=True, hide_index=True, height=240)
+    st.dataframe(pd.DataFrame(stats_data), use_container_width=True, hide_index=True, height=200)
     
     # Show last Spark update time
     try:
-        summary = redis_client.get('analytics:summary')
-        if summary:
-            data = json.loads(summary)
+        summary_str = redis_client.get('analytics:summary')
+        if summary_str:
+            data = json.loads(summary_str)
             last_update = data.get('last_updated', 'Unknown')
             st.caption(f"🔄 Last Spark Analytics Update: {last_update}")
+            st.caption(f"⚡ Data from Spark SQL JOINS")
         else:
             st.caption("⏳ Waiting for first Spark analytics run...")
     except:
@@ -332,5 +363,5 @@ if 'rerun_count' not in st.session_state:
 st.session_state.rerun_count += 1
 
 # Auto-refresh mechanism
-time.sleep(10)
+time.sleep(2)
 st.rerun()
