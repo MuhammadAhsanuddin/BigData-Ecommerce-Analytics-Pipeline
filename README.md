@@ -185,15 +185,12 @@ Each DAG follows a **single-responsibility design** for reliability and maintain
 
 ---
 
-## 📈 Dashboard Capabilities
-
-The dashboard provides:
-- Live revenue and order trends  
-- Product performance rankings  
-- Geographic order distribution  
-- Payment performance metrics  
-- Customer segment insights  
-- System health indicators  
+## 📈 Dashboard
+<img width="1600" height="757" alt="image" src="https://github.com/user-attachments/assets/6e529aac-4f08-4118-bbc5-146407c8afa3" />
+<img width="1600" height="692" alt="image" src="https://github.com/user-attachments/assets/8577721a-1022-40b6-8c27-25e0f2dab5dc" />
+<img width="1600" height="735" alt="image" src="https://github.com/user-attachments/assets/880f5ccb-f2be-491d-a144-de76137c3bbb" />
+<img width="1600" height="582" alt="image" src="https://github.com/user-attachments/assets/4efc1cfb-a20e-41bf-9249-8478cff0fef6" />
+<img width="1600" height="758" alt="image" src="https://github.com/user-attachments/assets/9749e7c5-2caf-4b78-a082-e8c8e0cd0de0" />
 
 ---
 
