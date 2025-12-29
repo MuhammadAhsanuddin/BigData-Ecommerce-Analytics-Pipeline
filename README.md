@@ -125,8 +125,8 @@ Captures transactional metrics:
 - Total revenue  
 - Total orders  
 - Average order value  
-- Tax collected  
-- Shipping cost  
+- Unique Customers  
+- Payment Success
 
 ### **Dimension Tables**
 - `customers_dim` – customer attributes and segments  
