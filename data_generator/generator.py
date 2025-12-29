@@ -157,7 +157,7 @@ while True:
             producer.send('orders', value=event)
             print(f"📦 Sent order: {event['order']['order_id']} | Amount: ${event['order']['total_amount']}")
         
-        time.sleep(5)  # Generate every 5 seconds
+        time.sleep(0.05)  # Generate every 5 seconds
         
     except Exception as e:
         print(f"❌ Error: {e}")

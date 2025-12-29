@@ -1,27 +1,30 @@
 """
 Spark job to archive old data from MongoDB to HDFS
-Archives data older than 2 hours when MongoDB > 20 MB (for demo purposes)
+Also updates Hive metastore automatically
 """
 
 import json
 from datetime import datetime, timedelta
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col
 from pymongo import MongoClient
 
 def archive_mongodb_to_hdfs():
-    """Archive old MongoDB data to HDFS"""
+    """Archive old MongoDB data to HDFS and update Hive"""
     
     print("=" * 80)
     print("📦 STARTING MONGODB → HDFS ARCHIVING")
     print("=" * 80)
     
-    # Create Spark session with MongoDB connector
+    # Create Spark session with MongoDB connector AND Hive support
     print("🔧 Creating Spark session...")
     spark = SparkSession.builder \
         .appName("MongoDBArchiver") \
         .config("spark.jars.packages", "org.mongodb.spark:mongo-spark-connector_2.12:3.0.1") \
         .config("spark.hadoop.fs.defaultFS", "hdfs://namenode:9000") \
+        .config("spark.sql.warehouse.dir", "hdfs://namenode:9000/user/hive/warehouse") \
+        .config("spark.sql.catalogImplementation", "hive") \
+        .config("hive.metastore.uris", "thrift://hive-metastore:9083") \
+        .enableHiveSupport() \
         .getOrCreate()
     
     spark.sparkContext.setLogLevel("WARN")
@@ -42,9 +45,9 @@ def archive_mongodb_to_hdfs():
         print(f"📊 MongoDB Status:")
         print(f"   - Size: {size_mb:.2f} MB")
         print(f"   - Orders: {total_orders:,}")
-        print(f"   - Threshold: 50 MB")
+        print(f"   - Threshold: 300 MB")
         
-        if size_mb < 20:
+        if size_mb < 300:
             print(f"✅ Size below threshold. No archiving needed.")
             client.close()
             spark.stop()
@@ -53,7 +56,7 @@ def archive_mongodb_to_hdfs():
         print(f"⚠️ Size exceeds threshold! Initiating archival...")
         
         # Calculate threshold date (keep last 2 hours, archive older)
-        threshold_date = datetime.now() - timedelta(hours=2)
+        threshold_date = datetime.now() - timedelta(minutes=5)
         threshold_iso = threshold_date.isoformat()
         
         print(f"🔍 Archiving orders older than: {threshold_iso}")
@@ -121,8 +124,74 @@ def archive_mongodb_to_hdfs():
         
         print(f"✅ Metadata written successfully")
         
-        # Delete archived records from MongoDB
-        print(f"🗑️ Deleting {record_count:,} archived records from MongoDB...")
+        # ========================================
+        # UPDATE HIVE METASTORE (OPTIONAL)
+        # ========================================
+        print("\n🗄️ Updating Hive Metastore...")
+        
+        try:
+            # Create database if not exists
+            spark.sql("CREATE DATABASE IF NOT EXISTS ecommerce_warehouse")
+            spark.sql("USE ecommerce_warehouse")
+            
+            # Create archive metadata table
+            spark.sql("""
+                CREATE TABLE IF NOT EXISTS archive_metadata (
+                    archive_id STRING,
+                    archive_timestamp STRING,
+                    source STRING,
+                    record_count BIGINT,
+                    storage_location STRING,
+                    mongodb_size_before_mb DOUBLE,
+                    created_at TIMESTAMP
+                )
+                STORED AS PARQUET
+                LOCATION 'hdfs://namenode:9000/user/hive/warehouse/archive_metadata'
+            """)
+            
+            # Insert metadata into Hive
+            spark.sql(f"""
+                INSERT INTO archive_metadata VALUES (
+                    '{archive_id}',
+                    '{metadata['timestamp']}',
+                    '{metadata['source']}',
+                    {metadata['record_count']},
+                    '{metadata['storage_location']}',
+                    {metadata['mongodb_size_before_mb']},
+                    current_timestamp()
+                )
+            """)
+            
+            print("✅ Archive metadata added to Hive")
+            
+            # Create external table for this specific archive
+            table_name = f"archived_orders_{archive_id}"
+            
+            spark.sql(f"""
+                CREATE EXTERNAL TABLE IF NOT EXISTS {table_name} (
+                    _id STRING,
+                    order_col STRUCT<order_id:STRING, timestamp:STRING, total_amount:DOUBLE, quantity:INT, payment_method:STRING, status:STRING>,
+                    customer STRUCT<customer_id:STRING, name:STRING, email:STRING, state:STRING>,
+                    product STRUCT<product_id:STRING, name:STRING, category:STRING, price:DOUBLE>
+                )
+                STORED AS PARQUET
+                LOCATION '{hdfs_path}'
+            """)
+            
+            print(f"✅ Created Hive table: {table_name}")
+            
+            # Show Hive summary
+            total_archives = spark.sql("SELECT COUNT(*) as count FROM archive_metadata").first()['count']
+            print(f"📊 Total archives in Hive: {total_archives}")
+            
+        except Exception as e:
+            print(f"⚠️ Could not update Hive metastore: {e}")
+            print("   (This is optional - archiving still succeeded)")
+        
+        # ========================================
+        # DELETE FROM MONGODB
+        # ========================================
+        print(f"\n🗑️ Deleting {record_count:,} archived records from MongoDB...")
         result = collection.delete_many(old_records_query)
         deleted_count = result.deleted_count
         

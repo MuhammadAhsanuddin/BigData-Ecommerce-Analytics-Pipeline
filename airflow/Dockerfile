@@ -11,7 +11,6 @@ RUN apt-get update && \
 ENV JAVA_HOME=/usr/lib/jvm/default-java
 
 # 3. Install Apache Spark binaries (Client side)
-# UPDATED: We use 3.5.1 to match the Airflow constraints
 RUN curl -o spark-3.5.1-bin-hadoop3.tgz https://archive.apache.org/dist/spark/spark-3.5.1/spark-3.5.1-bin-hadoop3.tgz && \
     tar -xzf spark-3.5.1-bin-hadoop3.tgz && \
     mv spark-3.5.1-bin-hadoop3 /opt/spark && \
@@ -27,7 +26,6 @@ RUN chmod +x /init-airflow.sh && chown airflow:root /init-airflow.sh
 
 USER airflow
 
-# 6. Install Python dependencies
-# UPDATED: We removed '==3.5.0'. The constraint file will automatically install 3.5.1
-RUN pip install apache-airflow-providers-apache-spark pyspark pymongo redis \
+# 6. Install Python dependencies (ADD KAFKA-PYTHON HERE!)
+RUN pip install apache-airflow-providers-apache-spark pyspark pymongo redis kafka-python \
     --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.9.3/constraints-3.9.txt"
